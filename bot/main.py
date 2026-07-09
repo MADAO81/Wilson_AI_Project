@@ -6,7 +6,6 @@
 # ===================================================================
 
 import logging
-import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -104,8 +103,9 @@ def main():
     # Создаём приложение
     application = Application.builder().token(config.BOT_TOKEN).build()
     
-    # Сохраняем db_manager в контексте приложения для доступа из хендлеров
+    # Сохраняем db_manager и config в контексте приложения для доступа из хендлеров
     application.bot_data["db_manager"] = db_manager
+    application.bot_data["config"] = config  # <--- ЭТА СТРОКА ДОБАВЛЕНА
     
     # Регистрируем команды
     application.add_handler(CommandHandler("start", start.start_command))
