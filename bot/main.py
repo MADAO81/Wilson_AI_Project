@@ -32,7 +32,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик всех текстовых сообщений."""
+    """Обработчик всех текстовых сообщений (включая пароль)."""
     user_id = update.effective_user.id
     
     # Проверяем, что это разрешённый пользователь
@@ -40,28 +40,57 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ У тебя нет доступа к этому боту.")
         return
     
-    # Проверяем, что сессия активна (пароль введён)
-    if not context.user_data.get("authenticated", False):
+    # --- ЛОГИКА РАБОТЫ С ПАРОЛЕМ ---
+    # Если пользователь уже авторизован — пропускаем
+    if context.user_data.get("authenticated", False):
+        # Здесь будет обработка обычных сообщений
+        user_message = update.message.text
+        # TODO: Интеграция с DeepSeek
         await update.message.reply_text(
-            "🔐 Пожалуйста, введи пароль для доступа к твоим диалогам.\n"
-            "Если ты новый пользователь — придумай пароль и отправь его."
+            f"🧠 Я Wilson. Ты написал: «{user_message}»\n"
+            "Пока я учусь отвечать, но скоро я стану настоящим другом!"
         )
         return
     
-    # Получаем сообщение пользователя
-    user_message = update.message.text
-    
-    # TODO: Здесь будет интеграция с DeepSeek
-    # 1. Получить историю диалога из БД
-    # 2. Отправить запрос в DeepSeek
-    # 3. Сохранить ответ в БД
-    # 4. Отправить ответ пользователю
-    
-    # Временный ответ (заглушка)
-    await update.message.reply_text(
-        f"🧠 Я Wilson. Ты написал: «{user_message}»\n"
-        "Пока я учусь отвечать, но скоро я стану настоящим другом!"
-    )
+    # Если пользователь ещё не авторизован — обрабатываем ввод пароля
+    # Проверяем, ждём ли мы пароль
+    if context.user_data.get("awaiting_password", False):
+        # Получаем введённый пароль
+        password = update.message.text.strip()
+        
+        if not password:
+            await update.message.reply_text("❌ Пароль не может быть пустым. Попробуй ещё раз.")
+            return
+        
+        # Сохраняем пароль в сессии
+        context.user_data["password"] = password
+        context.user_data["authenticated"] = True
+        context.user_data["awaiting_password"] = False
+        
+        # Подключаемся к базе данных с этим паролем
+        db_manager = context.bot_data["db_manager"]
+        if db_manager.connect(password):
+            await update.message.reply_text(
+                "✅ Пароль принят! Твоя база данных открыта.\n"
+                "Теперь мы можем общаться. Просто напиши мне что-нибудь!"
+            )
+        else:
+            # Если подключение не удалось — сбрасываем авторизацию
+            context.user_data["authenticated"] = False
+            await update.message.reply_text(
+                "❌ Не удалось открыть базу данных. Возможно, пароль неверный.\n"
+                "Попробуй ещё раз или напиши /start для повторной попытки."
+            )
+        return
+    else:
+        # Если пользователь не авторизован и не ждём пароль — просим ввести
+        context.user_data["awaiting_password"] = True
+        await update.message.reply_text(
+            "🔐 Придумай и отправь мне пароль для твоей базы данных.\n"
+            "Он будет использоваться для шифрования твоих диалогов.\n"
+            "Этот пароль я нигде не храню — только ты знаешь его."
+        )
+        return
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик голосовых сообщений."""
@@ -72,10 +101,10 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not context.user_data.get("authenticated", False):
-        await update.message.reply_text("🔐 Пожалуйста, введи пароль для доступа к диалогам.")
+        await update.message.reply_text("🔐 Пожалуйста, сначала введи пароль (команда /start).")
         return
     
-    # TODO: Интеграция с DeepSeek ASR (распознавание речи)
+    # TODO: Интеграция с DeepSeek ASR
     await update.message.reply_text("🎤 Я получил твоё голосовое сообщение. Скоро я научусь его понимать!")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -87,25 +116,25 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not context.user_data.get("authenticated", False):
-        await update.message.reply_text("🔐 Пожалуйста, введи пароль для доступа к диалогам.")
+        await update.message.reply_text("🔐 Пожалуйста, сначала введи пароль (команда /start).")
         return
     
-    # TODO: Интеграция с DeepSeek Vision (анализ изображений)
+    # TODO: Интеграция с DeepSeek Vision
     await update.message.reply_text("🖼️ Я получил твою картинку. Скоро я научусь её описывать!")
 
 def main():
     """Запуск бота."""
     global db_manager
     
-    # Инициализируем базу данных
+    # Инициализируем менеджер базы данных
     db_manager = DatabaseManager(config.DATABASE_PATH)
     
     # Создаём приложение
     application = Application.builder().token(config.BOT_TOKEN).build()
     
-    # Сохраняем db_manager и config в контексте приложения для доступа из хендлеров
+    # Сохраняем зависимости в bot_data для доступа из хендлеров
     application.bot_data["db_manager"] = db_manager
-    application.bot_data["config"] = config  # <--- ЭТА СТРОКА ДОБАВЛЕНА
+    application.bot_data["config"] = config
     
     # Регистрируем команды
     application.add_handler(CommandHandler("start", start.start_command))
