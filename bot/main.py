@@ -1,11 +1,12 @@
 # ===================================================================
 # Wilson_AI Project
-# Core Bot Application
+# Core Bot Application with DeepSeek Integration
 # Author: MADAO81 (https://github.com/MADAO81)
-# Description: Main entry point for the Wilson Telegram bot.
 # ===================================================================
 
 import logging
+import asyncio
+from openai import AsyncOpenAI
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -20,8 +21,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Глобальный менеджер базы данных (будет инициализирован после запуска)
+# Глобальные переменные
 db_manager = None
+deepseek_client = None
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок."""
@@ -30,6 +32,32 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(
             "😅 Что-то пошло не так. Попробуй еще раз или напиши /help."
         )
+
+async def get_deepseek_response(user_message: str, history: list) -> str:
+    """Отправка запроса к DeepSeek и получение ответа."""
+    try:
+        # Формируем сообщения для API
+        messages = [
+            {"role": "system", "content": config.SYSTEM_PROMPT}
+        ]
+        # Добавляем историю (до 10 последних сообщений)
+        for role, content in history[-10:]:
+            messages.append({"role": role, "content": content})
+        # Добавляем текущее сообщение пользователя
+        messages.append({"role": "user", "content": user_message})
+        
+        # Отправляем запрос к DeepSeek
+        response = await deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=messages,
+            temperature=0.9,
+            max_tokens=2000
+        )
+        
+        return response.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Ошибка при обращении к DeepSeek: {e}")
+        return "😅 Извини, я сейчас не могу ответить. Попробуй позже."
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик всех текстовых сообщений (включая пароль)."""
@@ -43,19 +71,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- ЛОГИКА РАБОТЫ С ПАРОЛЕМ ---
     # Если пользователь уже авторизован — пропускаем
     if context.user_data.get("authenticated", False):
-        # Здесь будет обработка обычных сообщений
+        # Получаем сообщение пользователя
         user_message = update.message.text
-        # TODO: Интеграция с DeepSeek
-        await update.message.reply_text(
-            f"🧠 Я Wilson. Ты написал: «{user_message}»\n"
-            "Пока я учусь отвечать, но скоро я стану настоящим другом!"
-        )
+        
+        # Отправляем статус "печатает"
+        await update.message.chat.send_action(action="typing")
+        
+        try:
+            # Получаем историю из базы данных
+            db = context.bot_data["db_manager"]
+            history = db.get_history(limit=10)
+            
+            # Получаем ответ от DeepSeek
+            bot_response = await get_deepseek_response(user_message, history)
+            
+            # Сохраняем диалог в базу
+            db.save_message("user", user_message)
+            db.save_message("assistant", bot_response)
+            
+            # Отправляем ответ пользователю
+            await update.message.reply_text(bot_response)
+            
+        except Exception as e:
+            logger.error(f"Ошибка в handle_message: {e}")
+            await update.message.reply_text(
+                "😅 Произошла ошибка. Попробуй еще раз."
+            )
         return
     
+    # --- ОБРАБОТКА ПАРОЛЯ ---
     # Если пользователь ещё не авторизован — обрабатываем ввод пароля
-    # Проверяем, ждём ли мы пароль
     if context.user_data.get("awaiting_password", False):
-        # Получаем введённый пароль
         password = update.message.text.strip()
         
         if not password:
@@ -67,7 +113,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["authenticated"] = True
         context.user_data["awaiting_password"] = False
         
-        # Подключаемся к базе данных с этим паролем
+        # Подключаемся к базе данных
         db_manager = context.bot_data["db_manager"]
         if db_manager.connect(password):
             await update.message.reply_text(
@@ -75,7 +121,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Теперь мы можем общаться. Просто напиши мне что-нибудь!"
             )
         else:
-            # Если подключение не удалось — сбрасываем авторизацию
             context.user_data["authenticated"] = False
             await update.message.reply_text(
                 "❌ Не удалось открыть базу данных. Возможно, пароль неверный.\n"
@@ -83,7 +128,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
     else:
-        # Если пользователь не авторизован и не ждём пароль — просим ввести
+        # Если не авторизован и не ждём пароль — просим ввести
         context.user_data["awaiting_password"] = True
         await update.message.reply_text(
             "🔐 Придумай и отправь мне пароль для твоей базы данных.\n"
@@ -124,17 +169,24 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     """Запуск бота."""
-    global db_manager
+    global db_manager, deepseek_client
     
     # Инициализируем менеджер базы данных
     db_manager = DatabaseManager(config.DATABASE_PATH)
     
+    # Инициализируем клиента DeepSeek
+    deepseek_client = AsyncOpenAI(
+        api_key=config.DEEPSEEK_API_KEY,
+        base_url=config.DEEPSEEK_BASE_URL
+    )
+    
     # Создаём приложение
     application = Application.builder().token(config.BOT_TOKEN).build()
     
-    # Сохраняем зависимости в bot_data для доступа из хендлеров
+    # Сохраняем зависимости в bot_data
     application.bot_data["db_manager"] = db_manager
     application.bot_data["config"] = config
+    application.bot_data["deepseek_client"] = deepseek_client
     
     # Регистрируем команды
     application.add_handler(CommandHandler("start", start.start_command))
@@ -151,7 +203,7 @@ def main():
     application.add_error_handler(error_handler)
     
     # Запускаем бота
-    logger.info("🚀 Wilson запускается...")
+    logger.info("🚀 Wilson запускается с DeepSeek...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
