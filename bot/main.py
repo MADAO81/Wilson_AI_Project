@@ -1,11 +1,10 @@
 # ===================================================================
 # Wilson_AI Project
-# Core Bot Application with DeepSeek Integration
+# Core Bot Application with DeepSeek via ProxyAPI
 # Author: MADAO81 (https://github.com/MADAO81)
 # ===================================================================
 
 import logging
-import asyncio
 from openai import AsyncOpenAI
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -34,7 +33,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def get_deepseek_response(user_message: str, history: list) -> str:
-    """Отправка запроса к DeepSeek и получение ответа."""
+    """Отправка запроса к DeepSeek через ProxyAPI и получение ответа."""
     try:
         # Формируем сообщения для API
         messages = [
@@ -46,9 +45,9 @@ async def get_deepseek_response(user_message: str, history: list) -> str:
         # Добавляем текущее сообщение пользователя
         messages.append({"role": "user", "content": user_message})
         
-        # Отправляем запрос к DeepSeek
+        # Отправляем запрос к DeepSeek через ProxyAPI
         response = await deepseek_client.chat.completions.create(
-            model="deepseek-chat",
+            model=config.DEEPSEEK_MODEL,
             messages=messages,
             temperature=0.9,
             max_tokens=2000
@@ -56,116 +55,104 @@ async def get_deepseek_response(user_message: str, history: list) -> str:
         
         return response.choices[0].message.content
     except Exception as e:
-        logger.error(f"Ошибка при обращении к DeepSeek: {e}")
+        logger.error(f"Ошибка при обращении к DeepSeek через ProxyAPI: {e}")
         return "😅 Извини, я сейчас не могу ответить. Попробуй позже."
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик всех текстовых сообщений (включая пароль)."""
+    """Обработчик всех текстовых сообщений."""
     user_id = update.effective_user.id
     
-    # Проверяем, что это разрешённый пользователь
+    # Проверяем доступ
     if user_id != config.USER_ID:
         await update.message.reply_text("⛔ У тебя нет доступа к этому боту.")
         return
     
-    # --- ЛОГИКА РАБОТЫ С ПАРОЛЕМ ---
-    # Если пользователь уже авторизован — пропускаем
-    if context.user_data.get("authenticated", False):
-        # Получаем сообщение пользователя
-        user_message = update.message.text
-        
-        # Отправляем статус "печатает"
-        await update.message.chat.send_action(action="typing")
-        
-        try:
-            # Получаем историю из базы данных
-            db = context.bot_data["db_manager"]
-            history = db.get_history(limit=10)
+    # Проверяем авторизацию
+    if not context.user_data.get("authenticated", False):
+        # Обработка пароля
+        if context.user_data.get("awaiting_password", False):
+            password = update.message.text.strip()
+            if not password:
+                await update.message.reply_text("❌ Пароль не может быть пустым.")
+                return
             
-            # Получаем ответ от DeepSeek
-            bot_response = await get_deepseek_response(user_message, history)
+            context.user_data["password"] = password
+            context.user_data["authenticated"] = True
+            context.user_data["awaiting_password"] = False
             
-            # Сохраняем диалог в базу
-            db.save_message("user", user_message)
-            db.save_message("assistant", bot_response)
-            
-            # Отправляем ответ пользователю
-            await update.message.reply_text(bot_response)
-            
-        except Exception as e:
-            logger.error(f"Ошибка в handle_message: {e}")
-            await update.message.reply_text(
-                "😅 Произошла ошибка. Попробуй еще раз."
-            )
-        return
-    
-    # --- ОБРАБОТКА ПАРОЛЯ ---
-    # Если пользователь ещё не авторизован — обрабатываем ввод пароля
-    if context.user_data.get("awaiting_password", False):
-        password = update.message.text.strip()
-        
-        if not password:
-            await update.message.reply_text("❌ Пароль не может быть пустым. Попробуй ещё раз.")
+            db_manager = context.bot_data["db_manager"]
+            if db_manager.connect(password):
+                await update.message.reply_text(
+                    "✅ Пароль принят! Твоя база данных открыта.\n"
+                    "Теперь мы можем общаться. Просто напиши мне что-нибудь!"
+                )
+            else:
+                context.user_data["authenticated"] = False
+                await update.message.reply_text(
+                    "❌ Не удалось открыть базу данных. Возможно, пароль неверный.\n"
+                    "Попробуй ещё раз или напиши /start."
+                )
             return
-        
-        # Сохраняем пароль в сессии
-        context.user_data["password"] = password
-        context.user_data["authenticated"] = True
-        context.user_data["awaiting_password"] = False
-        
-        # Подключаемся к базе данных
-        db_manager = context.bot_data["db_manager"]
-        if db_manager.connect(password):
-            await update.message.reply_text(
-                "✅ Пароль принят! Твоя база данных открыта.\n"
-                "Теперь мы можем общаться. Просто напиши мне что-нибудь!"
-            )
         else:
-            context.user_data["authenticated"] = False
+            context.user_data["awaiting_password"] = True
             await update.message.reply_text(
-                "❌ Не удалось открыть базу данных. Возможно, пароль неверный.\n"
-                "Попробуй ещё раз или напиши /start для повторной попытки."
+                "🔐 Придумай и отправь мне пароль для твоей базы данных.\n"
+                "Он будет использоваться для шифрования твоих диалогов."
             )
-        return
-    else:
-        # Если не авторизован и не ждём пароль — просим ввести
-        context.user_data["awaiting_password"] = True
+            return
+    
+    # --- Основная логика для авторизованного пользователя ---
+    user_message = update.message.text
+    
+    # Отправляем статус "печатает"
+    await update.message.chat.send_action(action="typing")
+    
+    try:
+        # Получаем историю из базы данных
+        db = context.bot_data["db_manager"]
+        history = db.get_history(limit=10)
+        
+        # Получаем ответ от DeepSeek через ProxyAPI
+        bot_response = await get_deepseek_response(user_message, history)
+        
+        # Сохраняем диалог в базу
+        db.save_message("user", user_message)
+        db.save_message("assistant", bot_response)
+        
+        # Отправляем ответ пользователю
+        await update.message.reply_text(bot_response)
+        
+    except Exception as e:
+        logger.error(f"Ошибка в handle_message: {e}")
         await update.message.reply_text(
-            "🔐 Придумай и отправь мне пароль для твоей базы данных.\n"
-            "Он будет использоваться для шифрования твоих диалогов.\n"
-            "Этот пароль я нигде не храню — только ты знаешь его."
+            "😅 Произошла ошибка. Попробуй еще раз."
         )
-        return
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик голосовых сообщений."""
+    """Обработчик голосовых сообщений (заглушка)."""
     user_id = update.effective_user.id
-    
     if user_id != config.USER_ID:
-        await update.message.reply_text("⛔ У тебя нет доступа к этому боту.")
+        await update.message.reply_text("⛔ У тебя нет доступа.")
         return
     
     if not context.user_data.get("authenticated", False):
-        await update.message.reply_text("🔐 Пожалуйста, сначала введи пароль (команда /start).")
+        await update.message.reply_text("🔐 Сначала введи пароль.")
         return
     
-    # TODO: Интеграция с DeepSeek ASR
-    await update.message.reply_text("🎤 Я получил твоё голосовое сообщение. Скоро я научусь его понимать!")
+    await update.message.reply_text("🎤 Голосовые сообщения пока не поддерживаются, но скоро появятся!")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик изображений."""
+    """Обработчик изображений (заглушка)."""
     user_id = update.effective_user.id
-    
     if user_id != config.USER_ID:
-        await update.message.reply_text("⛔ У тебя нет доступа к этому боту.")
+        await update.message.reply_text("⛔ У тебя нет доступа.")
         return
     
     if not context.user_data.get("authenticated", False):
-        await update.message.reply_text("🔐 Пожалуйста, сначала введи пароль (команда /start).")
+        await update.message.reply_text("🔐 Сначала введи пароль.")
         return
     
-    # TODO: Интеграция с DeepSeek Vision
-    await update.message.reply_text("🖼️ Я получил твою картинку. Скоро я научусь её описывать!")
+    await update.message.reply_text("🖼️ Анализ изображений пока не поддерживается, но скоро появится!")
 
 def main():
     """Запуск бота."""
@@ -174,7 +161,7 @@ def main():
     # Инициализируем менеджер базы данных
     db_manager = DatabaseManager(config.DATABASE_PATH)
     
-    # Инициализируем клиента DeepSeek
+    # Инициализируем клиента DeepSeek через ProxyAPI
     deepseek_client = AsyncOpenAI(
         api_key=config.DEEPSEEK_API_KEY,
         base_url=config.DEEPSEEK_BASE_URL
@@ -183,7 +170,7 @@ def main():
     # Создаём приложение
     application = Application.builder().token(config.BOT_TOKEN).build()
     
-    # Сохраняем зависимости в bot_data
+    # Сохраняем зависимости
     application.bot_data["db_manager"] = db_manager
     application.bot_data["config"] = config
     application.bot_data["deepseek_client"] = deepseek_client
@@ -203,7 +190,7 @@ def main():
     application.add_error_handler(error_handler)
     
     # Запускаем бота
-    logger.info("🚀 Wilson запускается с DeepSeek...")
+    logger.info("🚀 Wilson запускается с DeepSeek через ProxyAPI...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
