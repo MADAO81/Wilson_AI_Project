@@ -21,22 +21,22 @@ class Config:
     if USER_ID == 0:
         raise ValueError("USER_ID не задан в .env!")
     
-    # DeepSeek (совместим с OpenAI)
+    # DeepSeek API (через ProxyAPI)
     DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
     if not DEEPSEEK_API_KEY:
         raise ValueError("DEEPSEEK_API_KEY не задан в .env!")
     
-    DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
-    DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://openai.api.proxyapi.ru/v1")
+    DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek/deepseek-chat")
     
     # База данных
     DATABASE_PATH = os.getenv("DATABASE_PATH", "./data/dialogues.db")
     
     # Сессия
-    SESSION_TIMEOUT = int(os.getenv("SESSION_TIMEOUT", 30))  # минут
+    SESSION_TIMEOUT = int(os.getenv("SESSION_TIMEOUT", 30))
     
-    # Системный промпт (личность бота)
-    SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "Ты — добрый и поддерживающий собеседник по имени Wilson.")
+    # Системный промпт
+    SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "Ты — добрый и поддерживающий собеседник по имени Wilson. Ты помогаешь людям чувствовать себя лучше.")
     
     # Логирование
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -44,5 +44,4 @@ class Config:
     # Режим разработки
     DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
-# Создаём экземпляр конфига для импорта в других модулях
 config = Config()
