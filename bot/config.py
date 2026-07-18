@@ -21,13 +21,13 @@ class Config:
     if USER_ID == 0:
         raise ValueError("USER_ID не задан в .env!")
     
-    # DeepSeek API (через ProxyAPI)
+    # DeepSeek через OpenRouter (ProxyAPI)
     DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
     if not DEEPSEEK_API_KEY:
         raise ValueError("DEEPSEEK_API_KEY не задан в .env!")
     
-    DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://openai.api.proxyapi.ru/v1")
-    DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek/deepseek-chat")
+    DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.proxyapi.ru/openrouter/v1")
+    DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek/deepseek-v3.2")
     
     # База данных
     DATABASE_PATH = os.getenv("DATABASE_PATH", "./data/dialogues.db")
