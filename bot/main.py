@@ -5,6 +5,7 @@
 # ===================================================================
 
 import logging
+import os
 from openai import AsyncOpenAI
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -35,19 +36,15 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_deepseek_response(user_message: str, history: list) -> str:
     """Отправка запроса к DeepSeek через OpenRouter (ProxyAPI)."""
     try:
-        # Формируем сообщения
         messages = [
             {"role": "system", "content": config.SYSTEM_PROMPT}
         ]
-        # Добавляем историю (до 10 последних сообщений)
         for role, content in history[-10:]:
             messages.append({"role": role, "content": content})
-        # Добавляем текущее сообщение
         messages.append({"role": "user", "content": user_message})
         
-        # Отправляем запрос через OpenRouter
         response = await deepseek_client.chat.completions.create(
-            model=config.DEEPSEEK_MODEL,  # Теперь здесь deepseek/deepseek-v3.2
+            model=config.DEEPSEEK_MODEL,
             messages=messages,
             temperature=0.9,
             max_tokens=2000
@@ -59,47 +56,66 @@ async def get_deepseek_response(user_message: str, history: list) -> str:
         return "😅 Извини, я сейчас не могу ответить. Попробуй позже."
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик всех текстовых сообщений."""
+    """Обработчик всех текстовых сообщений с логикой 'придумать/ввести пароль'."""
     user_id = update.effective_user.id
     
     if user_id != config.USER_ID:
         await update.message.reply_text("⛔ У тебя нет доступа к этому боту.")
         return
     
-    # Проверяем авторизацию
+    # --- ЛОГИКА АВТОРИЗАЦИИ ---
     if not context.user_data.get("authenticated", False):
+        db_manager = context.bot_data["db_manager"]
+        
+        # Проверяем, существует ли база данных
+        db_exists = os.path.exists(db_manager.db_path)
+        
+        # Если пользователь уже вводит пароль (мы ждём его)
         if context.user_data.get("awaiting_password", False):
             password = update.message.text.strip()
+            
             if not password:
-                await update.message.reply_text("❌ Пароль не может быть пустым.")
+                await update.message.reply_text("❌ Пароль не может быть пустым. Попробуй ещё раз.")
                 return
             
-            context.user_data["password"] = password
-            context.user_data["authenticated"] = True
-            context.user_data["awaiting_password"] = False
-            
-            db_manager = context.bot_data["db_manager"]
+            # Пытаемся открыть базу с этим паролем
             if db_manager.connect(password):
+                context.user_data["password"] = password
+                context.user_data["authenticated"] = True
+                context.user_data["awaiting_password"] = False
+                
                 await update.message.reply_text(
-                    "✅ Пароль принят! Твоя база данных открыта.\n"
-                    "Теперь мы можем общаться. Просто напиши мне что-нибудь!"
+                    "✅ Пароль принят! База данных открыта.\n"
+                    "Рад снова тебя видеть! 😊"
                 )
             else:
-                context.user_data["authenticated"] = False
                 await update.message.reply_text(
-                    "❌ Не удалось открыть базу данных. Возможно, пароль неверный.\n"
-                    "Попробуй ещё раз или напиши /start."
+                    "❌ Неверный пароль. Попробуй ещё раз или напиши /start, чтобы начать заново."
                 )
             return
-        else:
-            context.user_data["awaiting_password"] = True
+        
+        # Если пароль ещё не вводили — определяем, что показать
+        if db_exists:
+            # База уже есть — просим ввести пароль
             await update.message.reply_text(
-                "🔐 Придумай и отправь мне пароль для твоей базы данных.\n"
-                "Он будет использоваться для шифрования твоих диалогов."
+                "🔐 Я тебя помню! Введи свой пароль, чтобы открыть базу данных.\n"
+                "Если забыл пароль — напиши /reset, чтобы начать заново."
             )
+            context.user_data["awaiting_password"] = True
+            return
+        else:
+            # Базы нет — это новый пользователь, просим придумать пароль
+            await update.message.reply_text(
+                "🏐 Привет! Ты здесь впервые.\n\n"
+                "Давай создадим пароль для твоей личной базы данных.\n"
+                "**Придумай пароль и отправь его мне.**\n"
+                "Этот пароль нужен только для того, чтобы защитить наши диалоги. Я его нигде не храню!",
+                parse_mode="Markdown"
+            )
+            context.user_data["awaiting_password"] = True
             return
     
-    # --- Основная логика для авторизованного пользователя ---
+    # --- ОСНОВНАЯ ЛОГИКА ДЛЯ АВТОРИЗОВАННОГО ПОЛЬЗОВАТЕЛЯ ---
     user_message = update.message.text
     
     await update.message.chat.send_action(action="typing")
@@ -122,6 +138,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик голосовых сообщений."""
     user_id = update.effective_user.id
     if user_id != config.USER_ID:
         await update.message.reply_text("⛔ У тебя нет доступа.")
@@ -134,6 +151,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎤 Голосовые сообщения пока не поддерживаются, но скоро появятся!")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик изображений."""
     user_id = update.effective_user.id
     if user_id != config.USER_ID:
         await update.message.reply_text("⛔ У тебя нет доступа.")
@@ -146,11 +164,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🖼️ Анализ изображений пока не поддерживается, но скоро появится!")
 
 def main():
+    """Запуск бота."""
     global db_manager, deepseek_client
+    
+    # Создаём папку для базы данных, если её нет
+    os.makedirs(os.path.dirname(config.DATABASE_PATH), exist_ok=True)
     
     db_manager = DatabaseManager(config.DATABASE_PATH)
     
-    # Инициализируем клиент DeepSeek через OpenRouter (ProxyAPI)
     deepseek_client = AsyncOpenAI(
         api_key=config.DEEPSEEK_API_KEY,
         base_url=config.DEEPSEEK_BASE_URL
