@@ -6,6 +6,7 @@
 
 import logging
 import os
+from datetime import datetime, timedelta
 from openai import AsyncOpenAI
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -56,12 +57,33 @@ async def get_deepseek_response(user_message: str, history: list) -> str:
         return "😅 Извини, я сейчас не могу ответить. Попробуй позже."
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик всех текстовых сообщений с логикой 'придумать/ввести пароль'."""
+    """Обработчик всех текстовых сообщений с логикой 'придумать/ввести пароль' и таймаутом."""
     user_id = update.effective_user.id
     
     if user_id != config.USER_ID:
         await update.message.reply_text("⛔ У тебя нет доступа к этому боту.")
         return
+    
+    # --- ПРОВЕРКА ТАЙМАУТА СЕССИИ ---
+    if context.user_data.get("authenticated", False):
+        last_activity = context.user_data.get("last_activity")
+        if last_activity:
+            # Проверяем, не истекло ли время сессии
+            time_diff = datetime.now() - last_activity
+            if time_diff > timedelta(minutes=config.SESSION_TIMEOUT):
+                # Сессия истекла
+                context.user_data["authenticated"] = False
+                context.user_data["awaiting_password"] = True
+                # Закрываем соединение с базой, если оно было открыто
+                db = context.bot_data["db_manager"]
+                db.close()
+                await update.message.reply_text(
+                    f"⏰ Сессия истекла ({config.SESSION_TIMEOUT} минут бездействия).\n"
+                    "Введи пароль заново, чтобы продолжить."
+                )
+                return
+        # Обновляем время последней активности
+        context.user_data["last_activity"] = datetime.now()
     
     # --- ЛОГИКА АВТОРИЗАЦИИ ---
     if not context.user_data.get("authenticated", False):
@@ -83,6 +105,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data["password"] = password
                 context.user_data["authenticated"] = True
                 context.user_data["awaiting_password"] = False
+                context.user_data["last_activity"] = datetime.now()
                 
                 await update.message.reply_text(
                     "✅ Пароль принят! База данных открыта.\n"
